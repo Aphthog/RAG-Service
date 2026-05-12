@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RAG Service - Demo</title>
+<title>RAG 检索服务</title>
 <style>
   :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --muted: #8b949e; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
   .container { max-width: 900px; margin: 0 auto; }
   h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
   .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
@@ -19,7 +19,6 @@
   .row input { flex: 1; }
   button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
   button:hover { opacity: 0.85; }
-  button.danger { background: var(--red); }
   button.outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
   .status { font-size: 0.8rem; padding: 0.4rem 0; }
   .status.ok { color: var(--green); }
@@ -28,7 +27,6 @@
   .result-item .score { font-size: 0.8rem; color: var(--accent); font-weight: 600; }
   .result-item .meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
   .result-item .content { font-size: 0.875rem; margin-top: 0.25rem; line-height: 1.5; }
-  .inline { display: flex; gap: 0.5rem; align-items: center; }
   .tenants { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.5rem; }
   .tenant-tag { background: var(--border); color: var(--text); border-radius: 20px; padding: 0.2rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
   .tenant-tag.active { background: var(--accent); }
@@ -38,40 +36,40 @@
 </head>
 <body>
 <div class="container">
-  <h1>RAG Service Demo</h1>
-  <p class="subtitle">Server: <span id="serverUrl">http://localhost:8000</span> · <span id="healthStatus">checking...</span></p>
+  <h1>RAG 检索服务</h1>
+  <p class="subtitle">服务地址：<span id="serverUrl">http://localhost:8000</span> · 状态：<span id="healthStatus">检测中...</span></p>
 
-  <!-- Tenant / Index -->
+  <!-- 索引文档 -->
   <div class="card">
-    <h2>1. Index Documents</h2>
+    <h2>1. 索引文档</h2>
     <div class="row">
-      <input type="text" id="tenantName" placeholder="Tenant name (e.g. my_kb)" value="demo" style="flex:1">
-      <button id="btnRefresh" class="outline">Refresh Tenants</button>
+      <input type="text" id="tenantName" placeholder="知识库名称，例如：my_kb" value="demo" style="flex:1">
+      <button id="btnRefresh" class="outline">刷新列表</button>
     </div>
     <div class="tenants" id="tenantList"></div>
-    <label class="section-label" for="indexText">Documents (one per line)</label>
-    <textarea id="indexText" placeholder="Python is a high-level programming language created by Guido van Rossum.&#10;FAISS is a library for efficient similarity search and clustering of dense vectors.&#10;RAG combines retrieval with text generation to produce more accurate answers."></textarea>
+    <label class="section-label" for="indexText">文档内容（每行一篇）</label>
+    <textarea id="indexText" placeholder="Python 是一种广泛使用的高级编程语言。&#10;FAISS 是 Facebook 开源的向量相似度搜索库。&#10;RAG 是检索增强生成技术，结合检索和生成两部分。"></textarea>
     <div class="row" style="margin-top:0.5rem">
-      <button id="btnIndex">Index Documents</button>
+      <button id="btnIndex">建立索引</button>
       <span class="status" id="indexStatus"></span>
     </div>
   </div>
 
-  <!-- Search -->
+  <!-- 搜索 -->
   <div class="card">
-    <h2>2. Search</h2>
+    <h2>2. 检索查询</h2>
     <div class="row">
-      <input type="text" id="searchQuery" placeholder="Enter your query..." style="flex:1">
-      <button id="btnSearch">Search</button>
+      <input type="text" id="searchQuery" placeholder="输入查询内容..." style="flex:1">
+      <button id="btnSearch">搜索</button>
     </div>
     <span class="status" id="searchStatus"></span>
     <div id="searchResults" style="margin-top:0.75rem"></div>
   </div>
 
-  <!-- Stats -->
+  <!-- 统计 -->
   <div class="card">
-    <h2>3. Index Stats</h2>
-    <button id="btnStats">Get Stats</button>
+    <h2>3. 索引统计</h2>
+    <button id="btnStats">查看统计</button>
     <pre id="statsDisplay" style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted)"></pre>
   </div>
 </div>
@@ -94,15 +92,15 @@ function setStatus(el, ok, msg) {
   el.className = 'status ' + (ok ? 'ok' : 'err');
 }
 
-// Health check
+// 健康检查
 (async () => {
   try {
     await fetch(BASE + '/health');
-    document.getElementById('healthStatus').textContent = 'connected';
+    document.getElementById('healthStatus').textContent = '已连接';
     document.getElementById('healthStatus').className = 'status ok';
     refreshTenants();
   } catch {
-    document.getElementById('healthStatus').textContent = 'disconnected';
+    document.getElementById('healthStatus').textContent = '未连接';
     document.getElementById('healthStatus').className = 'status err';
   }
 })();
@@ -122,63 +120,63 @@ function selectTenant(name) {
   refreshTenants();
 }
 
-// Index
+// 建立索引
 document.getElementById('btnIndex').onclick = async () => {
   const tenant = document.getElementById('tenantName').value || 'demo';
   const raw = document.getElementById('indexText').value.trim();
-  if (!raw) return setStatus(document.getElementById('indexStatus'), false, 'Please enter some text');
+  if (!raw) return setStatus(document.getElementById('indexStatus'), false, '请先输入文档内容');
   const texts = raw.split('\n').filter(l => l.trim());
   const status = document.getElementById('indexStatus');
-  setStatus(status, true, 'Indexing...');
+  setStatus(status, true, '正在建立索引...');
   try {
     const data = await api('POST', `/tenants/${tenant}/index`, { texts });
-    setStatus(status, true, `Indexed! ${data.chunk_count} chunks in tenant "${tenant}"`);
+    setStatus(status, true, `索引完成！共 ${data.chunk_count} 个分块，知识库 "${tenant}"`);
     activeTenant = tenant;
     refreshTenants();
   } catch (e) {
-    setStatus(status, false, 'Error: ' + e.message);
+    setStatus(status, false, '索引失败：' + e.message);
   }
 };
 
-// Search
+// 搜索
 document.getElementById('btnSearch').onclick = async () => {
   const tenant = document.getElementById('tenantName').value || 'demo';
   const query = document.getElementById('searchQuery').value.trim();
   if (!query) return;
   const status = document.getElementById('searchStatus');
-  setStatus(status, true, 'Searching...');
+  setStatus(status, true, '搜索中...');
   try {
     const data = await api('POST', `/tenants/${tenant}/search`, { query, top_k: 5 });
     const container = document.getElementById('searchResults');
     if (!data.results || data.results.length === 0) {
-      container.innerHTML = '<p style="color:var(--muted)">No results found.</p>';
-      setStatus(status, true, 'No results');
+      container.innerHTML = '<p style="color:var(--muted)">未找到相关结果。</p>';
+      setStatus(status, true, '无结果');
     } else {
       container.innerHTML = data.results.map(r => `
         <div class="result-item">
-          <div class="score">Score: ${r.score.toFixed(4)} · Chunk #${r.chunk_index}</div>
+          <div class="score">得分：${r.score.toFixed(4)} · 分块 #${r.chunk_index}</div>
           <div class="content">${escapeHtml(r.content)}</div>
-          <div class="meta">${JSON.stringify(r.metadata)}</div>
+          <div class="meta">来源：${JSON.stringify(r.metadata)}</div>
         </div>
       `).join('');
-      setStatus(status, true, `${data.results.length} results in ${tenant}`);
+      setStatus(status, true, `找到 ${data.results.length} 条结果（知识库：${tenant}）`);
     }
   } catch (e) {
-    setStatus(status, false, 'Error: ' + e.message);
+    setStatus(status, false, '搜索失败：' + e.message);
   }
 };
 
-// Enter key triggers search
+// 回车触发搜索
 document.getElementById('searchQuery').onkeydown = e => { if (e.key === 'Enter') document.getElementById('btnSearch').click(); };
 
-// Stats
+// 统计
 document.getElementById('btnStats').onclick = async () => {
   const tenant = document.getElementById('tenantName').value || 'demo';
   try {
     const data = await api('GET', `/tenants/${tenant}/stats`);
     document.getElementById('statsDisplay').textContent = JSON.stringify(data, null, 2);
   } catch (e) {
-    document.getElementById('statsDisplay').textContent = 'Error: ' + e.message;
+    document.getElementById('statsDisplay').textContent = '查询失败：' + e.message;
   }
 };
 
