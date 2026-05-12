@@ -1022,12 +1022,28 @@ class TestFAISSIndexer:
             lines = [json.loads(ln) for ln in f if ln.strip()]
         assert lines[0]["metadata"] == {"source": "a.md"}
         assert lines[1]["metadata"] == {"source": "b.md"}
+
+    def test_lock_contention_raises_index_locked_error(self, tmp_index_dir, monkeypatch):
+        """Simulate lock held by another process."""
+        from rag_service.errors import IndexLockedError
+        idx1 = FAISSIndexer(tmp_index_dir, "locked_tenant")
+        idx1.build(make_chunks(5), make_embeddings(5))
+        # Hold the lock manually
+        from filelock import FileLock
+        lock_path = os.path.join(tmp_index_dir, "locked_tenant", ".lock")
+        blocker = FileLock(lock_path, timeout=0.1)
+        blocker.acquire()
+        try:
+            with pytest.raises(IndexLockedError, match="locked"):
+                idx1.build(make_chunks(3), make_embeddings(3))
+        finally:
+            blocker.release()
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_indexer.py -v`
-Expected: FAIL — ModuleNotFoundError
+Expected: FAIL — ModuleNotFoundError (10 tests, 1 new)
 
 - [ ] **Step 3: Implement indexer.py**
 
@@ -1039,7 +1055,7 @@ import numpy as np
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from filelock import FileLock
 from rag_service.types import Embeddings
-from rag_service.errors import IndexNotFoundError, IndexBuildError
+from rag_service.errors import IndexNotFoundError, IndexBuildError, IndexLockedError
 
 logger = logging.getLogger("rag_service.indexer")
 
@@ -1058,18 +1074,21 @@ class FAISSIndexer:
         self._sparse_path = os.path.join(self._tenant_dir, self._SPARSE_FILE)
         self._chunks_path = os.path.join(self._tenant_dir, self._CHUNKS_FILE)
         self._lock_path = os.path.join(self._tenant_dir, self._LOCK_FILE)
-        self._lock = FileLock(self._lock_path)
+        self._lock = FileLock(self._lock_path, timeout=5)
         self._dense_index = None
         self._sparse_matrix = None
         self._chunks = []
         self._add_count_since_rebuild = 0
 
     def build(self, chunks: list[dict], emb: Embeddings) -> None:
-        with self._lock:
-            try:
-                return self._build_unlocked(chunks, emb)
-            except Exception as e:
-                raise IndexBuildError(str(e)) from e
+        try:
+            with self._lock:
+                try:
+                    return self._build_unlocked(chunks, emb)
+                except Exception as e:
+                    raise IndexBuildError(str(e)) from e
+        except self._lock.timeout_class:  # filelock Timeout
+            raise IndexLockedError(self._tenant_dir.split(os.sep)[-1]) from None
 
     def _build_unlocked(self, chunks: list[dict], emb: Embeddings) -> None:
         os.makedirs(self._tenant_dir, exist_ok=True)
@@ -1094,11 +1113,14 @@ class FAISSIndexer:
         self._add_count_since_rebuild = 0
 
     def add(self, chunks: list[dict], emb: Embeddings) -> None:
-        with self._lock:
-            try:
-                self._add_unlocked(chunks, emb)
-            except Exception as e:
-                raise IndexBuildError(str(e)) from e
+        try:
+            with self._lock:
+                try:
+                    self._add_unlocked(chunks, emb)
+                except Exception as e:
+                    raise IndexBuildError(str(e)) from e
+        except self._lock.timeout_class:
+            raise IndexLockedError(self._tenant_dir.split(os.sep)[-1]) from None
 
     def _add_unlocked(self, chunks: list[dict], emb: Embeddings) -> None:
         if self._dense_index is None:
@@ -1193,13 +1215,13 @@ class FAISSIndexer:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_indexer.py -v`
-Expected: ALL PASS (9 tests)
+Expected: ALL PASS (10 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add rag_service/indexer.py tests/test_indexer.py
-git commit -m "feat: add FAISS indexer with dense HNSW + scipy CSR sparse"
+git commit -m "feat: add FAISS indexer with dense HNSW + scipy CSR sparse + lock contention handling"
 ```
 
 ---
@@ -1805,7 +1827,7 @@ git commit -m "feat: wire up package exports in __init__.py"
 - [ ] **Step 1: Run full test suite**
 
 Run: `pytest tests/ -v`
-Expected: ALL PASS (~42 tests across 5 test files)
+Expected: ALL PASS (~43 tests across 5 test files)
 
 - [ ] **Step 2: Verify package is importable**
 
