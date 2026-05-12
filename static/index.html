@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Service - Demo</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --muted: #8b949e; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+  .card h2 { font-size: 1rem; margin-bottom: 0.75rem; }
+  textarea, input[type="text"] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem; color: var(--text); font-size: 0.875rem; font-family: inherit; }
+  textarea { resize: vertical; min-height: 80px; }
+  .row { display: flex; gap: 0.5rem; align-items: center; }
+  .row input { flex: 1; }
+  button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+  button:hover { opacity: 0.85; }
+  button.danger { background: var(--red); }
+  button.outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .status { font-size: 0.8rem; padding: 0.4rem 0; }
+  .status.ok { color: var(--green); }
+  .status.err { color: var(--red); }
+  .result-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; }
+  .result-item .score { font-size: 0.8rem; color: var(--accent); font-weight: 600; }
+  .result-item .meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+  .result-item .content { font-size: 0.875rem; margin-top: 0.25rem; line-height: 1.5; }
+  .inline { display: flex; gap: 0.5rem; align-items: center; }
+  .tenants { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .tenant-tag { background: var(--border); color: var(--text); border-radius: 20px; padding: 0.2rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
+  .tenant-tag.active { background: var(--accent); }
+  label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+  .section-label { margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>RAG Service Demo</h1>
+  <p class="subtitle">Server: <span id="serverUrl">http://localhost:8000</span> · <span id="healthStatus">checking...</span></p>
+
+  <!-- Tenant / Index -->
+  <div class="card">
+    <h2>1. Index Documents</h2>
+    <div class="row">
+      <input type="text" id="tenantName" placeholder="Tenant name (e.g. my_kb)" value="demo" style="flex:1">
+      <button id="btnRefresh" class="outline">Refresh Tenants</button>
+    </div>
+    <div class="tenants" id="tenantList"></div>
+    <label class="section-label" for="indexText">Documents (one per line)</label>
+    <textarea id="indexText" placeholder="Python is a high-level programming language created by Guido van Rossum.&#10;FAISS is a library for efficient similarity search and clustering of dense vectors.&#10;RAG combines retrieval with text generation to produce more accurate answers."></textarea>
+    <div class="row" style="margin-top:0.5rem">
+      <button id="btnIndex">Index Documents</button>
+      <span class="status" id="indexStatus"></span>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="card">
+    <h2>2. Search</h2>
+    <div class="row">
+      <input type="text" id="searchQuery" placeholder="Enter your query..." style="flex:1">
+      <button id="btnSearch">Search</button>
+    </div>
+    <span class="status" id="searchStatus"></span>
+    <div id="searchResults" style="margin-top:0.75rem"></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="card">
+    <h2>3. Index Stats</h2>
+    <button id="btnStats">Get Stats</button>
+    <pre id="statsDisplay" style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted)"></pre>
+  </div>
+</div>
+
+<script>
+const BASE = '';  // same-origin
+let activeTenant = 'demo';
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const res = await fetch(BASE + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+function setStatus(el, ok, msg) {
+  el.textContent = msg;
+  el.className = 'status ' + (ok ? 'ok' : 'err');
+}
+
+// Health check
+(async () => {
+  try {
+    await fetch(BASE + '/health');
+    document.getElementById('healthStatus').textContent = 'connected';
+    document.getElementById('healthStatus').className = 'status ok';
+    refreshTenants();
+  } catch {
+    document.getElementById('healthStatus').textContent = 'disconnected';
+    document.getElementById('healthStatus').className = 'status err';
+  }
+})();
+
+async function refreshTenants() {
+  try {
+    const data = await api('GET', '/tenants');
+    const list = document.getElementById('tenantList');
+    list.innerHTML = data.tenants.map(t => `<span class="tenant-tag${t===activeTenant?' active':''}" onclick="selectTenant('${t}')">${t}</span>`).join('');
+    if (data.tenants.length > 0 && !data.tenants.includes(activeTenant)) selectTenant(data.tenants[0]);
+  } catch { /* empty */ }
+}
+
+function selectTenant(name) {
+  activeTenant = name;
+  document.getElementById('tenantName').value = name;
+  refreshTenants();
+}
+
+// Index
+document.getElementById('btnIndex').onclick = async () => {
+  const tenant = document.getElementById('tenantName').value || 'demo';
+  const raw = document.getElementById('indexText').value.trim();
+  if (!raw) return setStatus(document.getElementById('indexStatus'), false, 'Please enter some text');
+  const texts = raw.split('\n').filter(l => l.trim());
+  const status = document.getElementById('indexStatus');
+  setStatus(status, true, 'Indexing...');
+  try {
+    const data = await api('POST', `/tenants/${tenant}/index`, { texts });
+    setStatus(status, true, `Indexed! ${data.chunk_count} chunks in tenant "${tenant}"`);
+    activeTenant = tenant;
+    refreshTenants();
+  } catch (e) {
+    setStatus(status, false, 'Error: ' + e.message);
+  }
+};
+
+// Search
+document.getElementById('btnSearch').onclick = async () => {
+  const tenant = document.getElementById('tenantName').value || 'demo';
+  const query = document.getElementById('searchQuery').value.trim();
+  if (!query) return;
+  const status = document.getElementById('searchStatus');
+  setStatus(status, true, 'Searching...');
+  try {
+    const data = await api('POST', `/tenants/${tenant}/search`, { query, top_k: 5 });
+    const container = document.getElementById('searchResults');
+    if (!data.results || data.results.length === 0) {
+      container.innerHTML = '<p style="color:var(--muted)">No results found.</p>';
+      setStatus(status, true, 'No results');
+    } else {
+      container.innerHTML = data.results.map(r => `
+        <div class="result-item">
+          <div class="score">Score: ${r.score.toFixed(4)} · Chunk #${r.chunk_index}</div>
+          <div class="content">${escapeHtml(r.content)}</div>
+          <div class="meta">${JSON.stringify(r.metadata)}</div>
+        </div>
+      `).join('');
+      setStatus(status, true, `${data.results.length} results in ${tenant}`);
+    }
+  } catch (e) {
+    setStatus(status, false, 'Error: ' + e.message);
+  }
+};
+
+// Enter key triggers search
+document.getElementById('searchQuery').onkeydown = e => { if (e.key === 'Enter') document.getElementById('btnSearch').click(); };
+
+// Stats
+document.getElementById('btnStats').onclick = async () => {
+  const tenant = document.getElementById('tenantName').value || 'demo';
+  try {
+    const data = await api('GET', `/tenants/${tenant}/stats`);
+    document.getElementById('statsDisplay').textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    document.getElementById('statsDisplay').textContent = 'Error: ' + e.message;
+  }
+};
+
+document.getElementById('btnRefresh').onclick = refreshTenants;
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

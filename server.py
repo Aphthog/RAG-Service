@@ -2,6 +2,8 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 INDEX_DIR = os.environ.get("RAG_INDEX_DIR", "./data/rag_indexes")
@@ -18,6 +20,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RAG Service", version="1.0.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class IndexRequest(BaseModel):
     texts: list[str]
@@ -80,6 +89,12 @@ async def tenant_stats(name: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+
+# Serve static frontend (mounted last so API routes match first)
+import os as _os
+_static_dir = _os.path.join(_os.path.dirname(__file__), "static")
+if _os.path.isdir(_static_dir):
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
