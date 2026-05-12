@@ -32,6 +32,10 @@
   .tenant-tag.active { background: var(--accent); }
   label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
   .section-label { margin-top: 0.75rem; }
+  .drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 1.5rem; text-align: center; color: var(--muted); cursor: pointer; transition: border-color 0.2s, background 0.2s; margin-top: 0.5rem; }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.05); }
+  .file-tag { display: inline-flex; align-items: center; gap: 0.3rem; background: var(--border); color: var(--text); border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.75rem; margin: 0.15rem; }
+  .file-tag .remove { cursor: pointer; color: var(--red); font-weight: bold; }
 </style>
 </head>
 <body>
@@ -43,14 +47,26 @@
   <div class="card">
     <h2>1. 索引文档</h2>
     <div class="row">
-      <input type="text" id="tenantName" placeholder="知识库名称，例如：my_kb" value="demo" style="flex:1">
+      <input type="text" id="tenantName" placeholder="知识库名称" value="demo" style="flex:1">
       <button id="btnRefresh" class="outline">刷新列表</button>
     </div>
     <div class="tenants" id="tenantList"></div>
-    <label class="section-label" for="indexText">文档内容（每行一篇）</label>
-    <textarea id="indexText" placeholder="Python 是一种广泛使用的高级编程语言。&#10;FAISS 是 Facebook 开源的向量相似度搜索库。&#10;RAG 是检索增强生成技术，结合检索和生成两部分。"></textarea>
-    <div class="row" style="margin-top:0.5rem">
+
+    <!-- 文件上传区 -->
+    <div class="drop-zone" id="dropZone">
+      <div style="font-size:1.5rem;margin-bottom:0.3rem">+</div>
+      <div>拖拽文件到这里，或点击选择</div>
+      <div style="font-size:0.75rem;color:var(--muted);margin-top:0.2rem">支持 .txt .md .py .json 等文本文件</div>
+      <input type="file" id="fileInput" multiple accept=".txt,.md,.py,.json,.csv,.log,.html,.css,.js,.ts,.yaml,.yml,.toml,.cfg,.ini" style="display:none">
+    </div>
+    <div id="fileList" style="margin-top:0.5rem"></div>
+
+    <label class="section-label" for="indexText">或直接粘贴文本（整段作为一篇文档）</label>
+    <textarea id="indexText" placeholder="直接粘贴文档内容..."></textarea>
+
+    <div class="row" style="margin-top:0.75rem">
       <button id="btnIndex">建立索引</button>
+      <button id="btnClear" class="outline">清空</button>
       <span class="status" id="indexStatus"></span>
     </div>
   </div>
@@ -75,8 +91,9 @@
 </div>
 
 <script>
-const BASE = '';  // same-origin
+const BASE = '';
 let activeTenant = 'demo';
+let uploadedFiles = [];  // { name, content }
 
 async function api(method, path, body) {
   const opts = { method, headers: {} };
@@ -90,6 +107,43 @@ async function api(method, path, body) {
 function setStatus(el, ok, msg) {
   el.textContent = msg;
   el.className = 'status ' + (ok ? 'ok' : 'err');
+}
+
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  if (uploadedFiles.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = '<span style="font-size:0.75rem;color:var(--muted)">已添加文件：</span> ' +
+    uploadedFiles.map((f, i) => `<span class="file-tag">${escapeHtml(f.name)}<span class="remove" onclick="removeFile(${i})">x</span></span>`).join('');
+}
+
+function removeFile(i) {
+  uploadedFiles.splice(i, 1);
+  renderFileList();
+}
+
+// 文件上传
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.onclick = () => fileInput.click();
+
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('drag-over'); };
+dropZone.ondragleave = () => dropZone.classList.remove('drag-over');
+dropZone.ondrop = e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+};
+
+fileInput.onchange = () => handleFiles(fileInput.files);
+
+async function handleFiles(files) {
+  for (const f of files) {
+    const text = await f.text();
+    uploadedFiles.push({ name: f.name, content: text });
+  }
+  fileInput.value = '';
+  renderFileList();
 }
 
 // 健康检查
@@ -124,8 +178,16 @@ function selectTenant(name) {
 document.getElementById('btnIndex').onclick = async () => {
   const tenant = document.getElementById('tenantName').value || 'demo';
   const raw = document.getElementById('indexText').value.trim();
-  if (!raw) return setStatus(document.getElementById('indexStatus'), false, '请先输入文档内容');
-  const texts = raw.split('\n').filter(l => l.trim());
+
+  let texts = [];
+  if (uploadedFiles.length > 0) {
+    texts = uploadedFiles.map(f => f.content);
+  } else if (raw) {
+    texts = [raw];  // 整段作为一篇文档，不拆行
+  } else {
+    return setStatus(document.getElementById('indexStatus'), false, '请上传文件或粘贴文档内容');
+  }
+
   const status = document.getElementById('indexStatus');
   setStatus(status, true, '正在建立索引...');
   try {
@@ -136,6 +198,13 @@ document.getElementById('btnIndex').onclick = async () => {
   } catch (e) {
     setStatus(status, false, '索引失败：' + e.message);
   }
+};
+
+// 清空
+document.getElementById('btnClear').onclick = () => {
+  document.getElementById('indexText').value = '';
+  uploadedFiles = [];
+  renderFileList();
 };
 
 // 搜索
@@ -166,7 +235,6 @@ document.getElementById('btnSearch').onclick = async () => {
   }
 };
 
-// 回车触发搜索
 document.getElementById('searchQuery').onkeydown = e => { if (e.key === 'Enter') document.getElementById('btnSearch').click(); };
 
 // 统计
