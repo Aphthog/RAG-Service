@@ -78,11 +78,16 @@ class RAGService:
         chunker = self._get_chunker()
         embedder = self._get_embedder()
 
+        logger.info("")
+        logger.info("=" * 50)
+        logger.info("📥 开始索引：租户 '%s'，共 %d 篇文档", tenant, len(texts))
+        logger.info("=" * 50)
+
         all_chunks = []
         all_chunk_dicts = []
         chunk_idx = 0
         for i, (text, meta) in enumerate(zip(texts, metadatas)):
-            logger.info("[%d/%d] Chunking text (%.1fK chars)...", i + 1, len(texts), len(text) / 1000)
+            logger.info("  ▶  [%d/%d] 切分文档 (%.1fK 字符)...", i + 1, len(texts), len(text) / 1000)
             chunks = chunker.chunk(text, metadata=meta)
             for c in chunks:
                 c.chunk_index = chunk_idx
@@ -96,32 +101,45 @@ class RAGService:
                 })
                 chunk_idx += 1
 
-        logger.info("Chunked %d texts into %d chunks.", len(texts), len(all_chunks))
+        logger.info("  ✓ 切分完成：%d 篇 → %d 个文本块", len(texts), len(all_chunks))
 
         chunk_texts = [c.text for c in all_chunks]
-        logger.info("Encoding %d chunks with bge-m3 (batch_size=%d)...", len(chunk_texts), self._embed_batch_size)
+        logger.info("  ▶ 编码 %d 个文本块（batch_size=%d）...", len(chunk_texts), self._embed_batch_size)
         embeddings = embedder.encode(chunk_texts, batch_size=self._embed_batch_size)
         logger.info(
             "Encoded %d chunks: dense=%s, sparse=%s",
             len(all_chunks), embeddings.dense.shape, embeddings.sparse.shape,
         )
+        logger.info("  ✓ 编码完成：稠密向量 %s，稀疏向量 %s", str(embeddings.dense.shape), str(embeddings.sparse.shape))
 
         indexer = self._get_indexer(tenant)
         tenant_dir = os.path.join(self._index_dir, tenant)
         if os.path.exists(os.path.join(tenant_dir, "dense.faiss")):
             indexer.load()
             indexer.add(all_chunk_dicts, embeddings)
-            logger.info("Added %d chunks to existing tenant '%s'.", len(all_chunks), tenant)
+            logger.info("  ✓ 已添加到已有索引 '%s'，当前共 %d 个块", tenant, indexer.chunk_count())
         else:
             indexer.build(all_chunk_dicts, embeddings)
-            logger.info("Built new index for tenant '%s' with %d chunks.", tenant, len(all_chunks))
+            logger.info("  ✓ 新建索引 '%s' 完成，共 %d 个块", tenant, len(all_chunks))
 
-        return indexer.chunk_count()
+        total = indexer.chunk_count()
+        logger.info("=" * 50)
+        logger.info("✅ 索引完成！租户 '%s' 总计 %d 个文本块", tenant, total)
+        logger.info("=" * 50)
+        logger.info("")
+
+        return total
 
     async def search(self, query: str, tenant: str, top_k: int = 5) -> list[SearchResult]:
         return self.search_sync(query, tenant, top_k)
 
     def search_sync(self, query: str, tenant: str, top_k: int = 5) -> list[SearchResult]:
+        logger.info("")
+        logger.info("=" * 50)
+        logger.info("🔍 检索：租户 '%s'，top_k=%d", tenant, top_k)
+        logger.info("   查询: %s%s", query[:120], "..." if len(query) > 120 else "")
+        logger.info("=" * 50)
+
         embedder = self._get_embedder()
         indexer = self._get_indexer(tenant)
 
@@ -135,6 +153,7 @@ class RAGService:
             embedder, indexer,
             enable_rerank=self._enable_rerank,
             recall_top_k=self._recall_top_k,
+            rerank_top_k=self._rerank_top_k,
         )
 
         rewritten = None
@@ -147,11 +166,13 @@ class RAGService:
 
         results = retriever.retrieve_sync(query, top_k=top_k, rewritten_queries=rewritten)
 
-        if self._verbose:
-            logger.debug("Query: %s", query)
-            logger.debug("Results: %d", len(results))
-            for r in results:
+        logger.info("  ✓ 召回 %d 个结果：", len(results))
+        for i, r in enumerate(results):
+            logger.info("    [%d] score=%.4f | %s...", i + 1, r.score, r.content[:80])
+            if self._verbose:
                 logger.debug("  score=%.4f chunk=%d content=%.80s", r.score, r.chunk_index, r.content)
+        logger.info("=" * 50)
+        logger.info("")
 
         return results
 

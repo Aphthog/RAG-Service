@@ -81,26 +81,7 @@ class SemanticChunker:
                 breakpoints.append(i + 1)
         breakpoints.append(len(sentences))
 
-        # Merge sentences between breakpoints into chunks within [min_chars, max_chars]
-        chunks = []
-        chunk_idx = 0
-        pos = 0
-
-        for bp_start, bp_end in zip(breakpoints[:-1], breakpoints[1:]):
-            segment = " ".join(sentences[bp_start:bp_end])
-            if chunk_idx == 0:
-                current_start = 0
-            else:
-                current_start = pos
-
-            # Add segment to current chunk or start new one
-            if chunk_idx == 0 or not chunks:
-                current = segment
-            else:
-                # Check if we can append to the growing chunk
-                pass  # handled below
-
-        # Rebuild: merge sentence segments into size-bounded chunks
+        # Merge sentences between breakpoints into size-bounded chunks
         chunks = []
         chunk_idx = 0
         current = ""
@@ -318,11 +299,10 @@ class AdaptiveChunker:
         if not text:
             return []
         if self._MARKDOWN_PATTERN.search(text):
-            logger.debug("AdaptiveChunker: routing to MarkdownChunker")
+            logger.info("    - 检测到 Markdown 格式，使用 MarkdownChunker")
             return self._markdown.chunk(text, metadata)
         if len(text) > self._LARGE_TEXT_THRESHOLD:
-            logger.info("AdaptiveChunker: text=%.1fK chars > %d threshold, routing to ParagraphChunker",
-                        len(text) / 1000, self._LARGE_TEXT_THRESHOLD)
+            logger.info("    - 文本较大 (%.1fK)，使用 ParagraphChunker", len(text) / 1000)
             return self._paragraph.chunk(text, metadata)
-        logger.debug("AdaptiveChunker: routing to SemanticChunker")
+        logger.info("    - 使用语义切分器 (SemanticChunker)")
         return self._semantic.chunk(text, metadata)

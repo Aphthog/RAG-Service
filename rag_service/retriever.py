@@ -15,12 +15,14 @@ class Retriever:
         indexer,
         enable_rerank: bool = True,
         recall_top_k: int = 50,
+        rerank_top_k: int = 5,
         reranker_model: str | None = None,
     ):
         self._embedder = embedder
         self._indexer = indexer
         self._enable_rerank = enable_rerank
         self._recall_top_k = recall_top_k
+        self._rerank_top_k = rerank_top_k
         self._reranker = None
         self._reranker_model = reranker_model or "BAAI/bge-reranker-v2-m3"
 
@@ -36,15 +38,22 @@ class Retriever:
         if rewritten_queries:
             queries.extend(rewritten_queries)
 
+        n_queries = len(queries)
+        n_chunks = self._indexer.chunk_count()
+        logger.info("  ▶ 混合检索：%d 个查询 × %d 个候选块（稠密权重=%s, 稀疏权重=%s）",
+                     n_queries, n_chunks, self.DENSE_WEIGHT, self.SPARSE_WEIGHT)
+
         all_candidates: dict[int, float] = {}
         for q in queries:
             emb = self._embedder.encode([q])
-            k = min(self._recall_top_k, self._indexer.chunk_count())
+            k = min(self._recall_top_k, n_chunks)
             if k == 0:
+                logger.info("  ⚠ 索引为空，无结果返回")
                 return []
 
             dense_results = self._indexer.search_dense(emb.dense, k * 2)
             sparse_results = self._indexer.search_sparse(emb.sparse, k * 2)
+            logger.info("    - 稠密召回 %d 个，稀疏召回 %d 个", len(dense_results), len(sparse_results))
 
             dense_scores = {cid: score for cid, score in dense_results}
             sparse_scores = {cid: score for cid, score in sparse_results}
@@ -53,9 +62,14 @@ class Retriever:
                 if scores:
                     max_val = max(scores.values())
                     min_val = min(scores.values())
-                    rng = max_val - min_val if max_val != min_val else 1
-                    for cid in scores:
-                        scores[cid] = (scores[cid] - min_val) / rng
+                    if max_val != min_val:
+                        rng = max_val - min_val
+                        for cid in scores:
+                            scores[cid] = (scores[cid] - min_val) / rng
+                    else:
+                        # 单点（或全相等）：min-max 无跨度，归一化会得到 0；保留为 1.0 便于展示与融合
+                        for cid in scores:
+                            scores[cid] = 1.0
 
             all_ids = set(dense_scores.keys()) | set(sparse_scores.keys())
             for cid in all_ids:
@@ -68,7 +82,10 @@ class Retriever:
         sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1], reverse=True)[:self._recall_top_k]
 
         if self._enable_rerank and len(sorted_candidates) > top_k:
-            sorted_candidates = self._rerank(query, sorted_candidates, top_k)
+            rerank_input = sorted_candidates[:self._rerank_top_k]
+            logger.info("  ▶ 重排序模型精排 %d 个候选...", len(rerank_input))
+            reranked = self._rerank(query, rerank_input, top_k)
+            sorted_candidates = reranked + sorted_candidates[len(rerank_input):]
 
         chunks = self._indexer.get_chunks()
         results = []
@@ -81,6 +98,7 @@ class Retriever:
                 score=float(score),
                 chunk_index=c.get("chunk_index", cid),
             ))
+        logger.info("  ✓ 最终返回 %d 个结果", len(results))
         return results
 
     def _rerank(self, query: str, candidates: list[tuple[int, float]], top_k: int) -> list[tuple[int, float]]:
@@ -102,5 +120,6 @@ class Retriever:
     def _load_reranker(self):
         logger.info("Loading reranker model (%s)...", self._reranker_model)
         from FlagEmbedding import FlagReranker
-        self._reranker = FlagReranker(self._reranker_model, use_fp16=True)
+        device = getattr(self._embedder, '_device', None)
+        self._reranker = FlagReranker(self._reranker_model, use_fp16=True, device=device)
         logger.info("Reranker model loaded.")

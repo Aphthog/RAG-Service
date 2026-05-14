@@ -43,6 +43,7 @@ class FAISSIndexer:
     def _build_unlocked(self, chunks: list[dict], emb: Embeddings) -> None:
         os.makedirs(self._tenant_dir, exist_ok=True)
         n, d = emb.dense.shape
+        logger.info("    - 构建 HNSW 索引（维度=%d, 连接数=32, efConstruction=200）", d)
         dense_index = self._faiss.IndexHNSWFlat(d, 32)
         dense_index.hnsw.efConstruction = 200
         dense_index.hnsw.efSearch = 512
@@ -53,6 +54,8 @@ class FAISSIndexer:
         self._faiss.write_index(dense_index, self._dense_path)
         save_npz(self._sparse_path, sparse_matrix)
         self._write_chunks(chunks)
+        logger.info("    - 索引文件写入完成: %s, %s, %s",
+                     self._dense_path, self._sparse_path, self._chunks_path)
         self._dense_index = dense_index
         self._sparse_matrix = sparse_matrix
         self._chunks = list(chunks)
@@ -97,11 +100,13 @@ class FAISSIndexer:
     def load(self, tenant: str | None = None) -> None:
         if not os.path.exists(self._dense_path):
             raise FileNotFoundError(f"Index not found for tenant. Expected at {self._dense_path}")
+        logger.info("  ▶ 加载索引: %s", self._tenant_dir)
         self._dense_index = self._faiss.read_index(self._dense_path)
         self._dense_index.hnsw.efSearch = 512
         self._sparse_matrix = load_npz(self._sparse_path)
         self._chunks = self._read_chunks()
         self._add_count_since_rebuild = 0
+        logger.info("  ✓ 索引加载完成: %d 个块（稠密 + 稀疏）", len(self._chunks))
 
     def search_dense(self, q: np.ndarray, k: int) -> list[tuple[int, float]]:
         if self._dense_index is None:
