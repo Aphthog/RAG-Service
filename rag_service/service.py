@@ -13,6 +13,7 @@ logger = logging.getLogger("rag_service")
 
 class RAGService:
     def __init__(
+
         self,
         index_dir: str,
         enable_rerank: bool = True,
@@ -80,7 +81,8 @@ class RAGService:
         all_chunks = []
         all_chunk_dicts = []
         chunk_idx = 0
-        for text, meta in zip(texts, metadatas):
+        for i, (text, meta) in enumerate(zip(texts, metadatas)):
+            logger.info("[%d/%d] Chunking text (%.1fK chars)...", i + 1, len(texts), len(text) / 1000)
             chunks = chunker.chunk(text, metadata=meta)
             for c in chunks:
                 c.chunk_index = chunk_idx
@@ -97,6 +99,7 @@ class RAGService:
         logger.info("Chunked %d texts into %d chunks.", len(texts), len(all_chunks))
 
         chunk_texts = [c.text for c in all_chunks]
+        logger.info("Encoding %d chunks with bge-m3 (batch_size=%d)...", len(chunk_texts), self._embed_batch_size)
         embeddings = embedder.encode(chunk_texts, batch_size=self._embed_batch_size)
         logger.info(
             "Encoded %d chunks: dense=%s, sparse=%s",

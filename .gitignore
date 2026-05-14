@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+data/rag_indexes/
+E:tmp/
+语句表达.json

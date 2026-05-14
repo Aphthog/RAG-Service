@@ -3,14 +3,23 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from rag_service.types import Embeddings
 
+# Suppress noisy httpx/huggingface hub logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
 logger = logging.getLogger("rag_service.embedder")
 
 
 class Embedder:
-    def __init__(self, model_path: str | None = None, device: str = "auto"):
+    def __init__(self, model_path: str | None = None, device: str | None = None):
         self._model_path = model_path
-        self._device = device
+        self._device = device or self._detect_device()
         self._model = None
+
+    @staticmethod
+    def _detect_device() -> str:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
 
     def _load_model(self):
         if self._model is not None:
@@ -28,21 +37,33 @@ class Embedder:
                 sparse=csr_matrix((0, 65536), dtype=np.float32),
             )
         self._load_model()
+        logger.info("Encoding %d texts (batch_size=%d, dim=%d)...", len(texts), batch_size, self.dim)
         output = self._model.encode(
             texts,
             batch_size=batch_size,
             output_value=None,
-            show_progress_bar=False,
+            show_progress_bar=True,
         )
-        if hasattr(output, 'dense_vecs') and hasattr(output, 'sparse_vecs'):
-            dense = np.array(output.dense_vecs, dtype=np.float32)
+
+        # Helper: convert potentially-CUDA tensor to numpy
+        def _to_numpy(v):
+            if hasattr(v, 'cpu'):
+                return v.cpu().numpy()
+            return np.asarray(v, dtype=np.float32)
+
+        # SentenceTransformer 3.x returns list[dict] with 'sentence_embedding' key
+        if isinstance(output, list) and output and isinstance(output[0], dict):
+            dense = np.array([_to_numpy(o["sentence_embedding"]) for o in output], dtype=np.float32)
+            sparse = csr_matrix((len(texts), 65536), dtype=np.float32)
+        elif hasattr(output, 'dense_vecs') and hasattr(output, 'sparse_vecs'):
+            dense = _to_numpy(output.dense_vecs)
             sparse_list = output.sparse_vecs
             if sparse_list:
                 sparse = self._sparse_to_csr(sparse_list, 65536)
             else:
                 sparse = csr_matrix((len(texts), 65536), dtype=np.float32)
         else:
-            dense = np.array(output, dtype=np.float32)
+            dense = _to_numpy(output)
             sparse = csr_matrix((len(texts), 65536), dtype=np.float32)
         return Embeddings(dense=dense, sparse=sparse)
 

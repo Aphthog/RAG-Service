@@ -1,22 +1,53 @@
 # RAG Service
 
-可复用的 Python RAG（检索增强生成）库，支持混合稠密+稀疏检索、自适应分块、多租户隔离。
+基于 bge-m3 的混合检索 RAG 服务，支持稠密+稀疏向量混合检索、自适应分块、多租户隔离、可选的 HTTP 服务及前端界面。
 
-## 功能特性
+## 使用场景
 
-- **混合检索** — bge-m3 模型：1024 维稠密向量（FAISS HNSW）+ 65536 维稀疏向量（scipy CSR），融合权重 0.7/0.3
-- **自适应分块** — Markdown 标题感知 + 语义相似度边界检测
-- **重排序** — bge-reranker-v2-m3 对候选结果精排
-- **多租户隔离** — 每个知识库独立索引目录，filelock 并发控制
-- **可选 HTTP 服务** — 内置 FastAPI 服务器 + 前端演示页面
+- **知识库问答** — 将企业文档、技术手册、产品说明等导入索引，基于语义搜索回答问题
+- **行测/试题检索** — 对结构化题目数据（题干 + 选项 + 解析）建索引，按知识点或描述性查询检索
+- **企业内部文档搜索** — 多租户隔离设计，不同团队/项目的文档独立索引，互不可见
+- **RAG 原型开发** — 提供简洁的 Python API 和 REST API，快速集成到 LLM 应用
 
 ## 安装
 
-```bash
-pip install git+https://github.com/Aphthog/rag-service.git
+### 依赖
 
-# 带 HTTP 服务依赖：
-pip install "rag-service[server] @ git+https://github.com/Aphthog/rag-service.git"
+- Python >= 3.11
+- 推荐使用 GPU 加速（CUDA），特别是模型推理和 reranker 环节
+
+### 从源码
+
+```bash
+git clone https://github.com/Aphthog/RAG-Service.git
+cd rag-service
+pip install -e .
+```
+
+### 带 HTTP 服务
+
+```bash
+pip install -e ".[server]"
+```
+
+依赖会自动从 `pyproject.toml` 安装，主要包含：
+
+| 依赖 | 用途 |
+|------|------|
+| `sentence-transformers` | bge-m3 嵌入模型推理 |
+| `FlagEmbedding` | bge-reranker-v2-m3 重排序模型 |
+| `faiss-cpu` | 稠密向量索引（HNSW） |
+| `scipy` | 稀疏向量索引（CSR） |
+| `fastapi / uvicorn` | HTTP 服务（可选） |
+
+### 模型下载
+
+首次使用会自动从 HuggingFace 下载模型（约 2.2GB）。如需指定缓存路径：
+
+```bash
+set HF_HOME=E:/ai_models/huggingface
+set TRANSFORMERS_CACHE=E:/ai_models/transformers
+set SENTENCE_TRANSFORMERS_HOME=E:/ai_models/sentence-transformers
 ```
 
 ## 快速开始
@@ -42,59 +73,55 @@ for r in results:
 ## HTTP 服务
 
 ```bash
-# 启动
 python server.py
 # 浏览器打开 http://localhost:8000 使用前端界面
+```
 
-# 或通过 API 调用：
+```bash
 # 建索引
 curl -X POST http://localhost:8000/tenants/my_kb/index \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["hello world", "foo bar"]}'
+  -d '{"texts": ["hello world"]}'
 
 # 搜索
 curl -X POST http://localhost:8000/tenants/my_kb/search \
   -H "Content-Type: application/json" \
   -d '{"query": "hello", "top_k": 3}'
-
-# 列出知识库
-curl http://localhost:8000/tenants
-
-# 健康检查
-curl http://localhost:8000/health
 ```
 
-## 模型下载
+## 架构
 
-首次使用会自动从 HuggingFace 下载模型。如需指定缓存路径，设置以下环境变量：
+```
+输入文档 → 自适应分块 → 向量化(稠密+稀疏) → FAISS 建索引 →
+用户 query → 向量化 → 混合检索 → [rerank] → 返回 top-k 结果
+```
+
+四大核心模块：
+
+| 模块 | 说明 |
+|------|------|
+| **Chunker** | 自适应分块：Markdown 标题感知 + 语义相似度边界检测 |
+| **Embedder** | bge-m3 模型，输出 1024 维稠密 + 65536 维稀疏向量 |
+| **Indexer** | FAISS HNSW (稠密) + scipy CSR (稀疏)，多租户文件锁隔离 |
+| **Retriever** | 混合检索（稠密 0.7 + 稀疏 0.3），可选 bge-reranker-v2-m3 精排 |
+
+## 当前缺陷
+
+- **分数归一化不稳定** — 检索器中的 min-max 归一化在同一批候选内做，多样本评分分布不均时可能导致排名失真（retriever.py 第 53-58 行）
+- **缺少 query 理解/改写** — 虽预留了接口，但尚未实现查询改写、同义词扩展等
+- **不支持文档更新** — 只能删除知识库后重建索引
+- **不支持标量过滤** — 无法按元数据字段（如来源、日期）缩小搜索范围
+- **模型冷启动** — 模型首次加载是懒加载，第一个请求会明显卡顿
+- **全内存索引** — 所有索引加载到内存，无分片机制，大数据量下内存压力大
+- **无监控/metrics** — 缺少请求延迟、索引大小、命中率等可观测性指标
+- **HNSW 增量退化** — 增量追加超过总量 20% 后检索质量可能下降，建议全量重建
+
+## 测试
 
 ```bash
-set HF_HOME=E:/ai_models/huggingface
-set TRANSFORMERS_CACHE=E:/ai_models/transformers
-set SENTENCE_TRANSFORMERS_HOME=E:/ai_models/sentence-transformers
+pytest tests/ -v
 ```
 
-## API
+## License
 
-### RAGService
-
-| 方法 | 说明 |
-|------|------|
-| `index_sync(tenant, texts, metadatas?)` | 索引文档（自动分块+向量化+建索引） |
-| `search_sync(query, tenant, top_k=5)` | 搜索已索引的分块 |
-| `delete_index_sync(tenant)` | 删除某个知识库 |
-| `list_tenants()` | 列出全部已索引的知识库 |
-| `index_stats(tenant)` | 获取知识库的分块数量和索引路径 |
-
-### 配置参数
-
-```python
-rag = RAGService(
-    index_dir="./data",         # 索引存储目录
-    enable_rerank=True,         # 是否启用 reranker 精排
-    chunk_max_chars=800,        # 单个分块最大字符数
-    chunk_overlap=80,           # 分块之间重叠字符数
-    recall_top_k=50,            # 混合检索召回候选数
-    embedder=my_embedder,       # 注入自定义 embedder（测试用）
-)
-```
+MIT

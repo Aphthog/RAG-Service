@@ -1,10 +1,18 @@
 """Optional FastAPI HTTP shell for RAGService. pip install rag-service[server] to use."""
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 INDEX_DIR = os.environ.get("RAG_INDEX_DIR", "./data/rag_indexes")
 rag_service = None
@@ -14,7 +22,7 @@ rag_service = None
 async def lifespan(app: FastAPI):
     global rag_service
     from rag_service import RAGService
-    rag_service = RAGService(index_dir=INDEX_DIR, enable_rerank=True)
+    rag_service = RAGService(index_dir=INDEX_DIR, enable_rerank=False)
     yield
 
 
@@ -53,8 +61,13 @@ async def health():
 @app.post("/tenants/{name}/index")
 async def index_tenant(name: str, req: IndexRequest):
     try:
-        count = await rag_service.index(name, req.texts, req.metadatas)
+        loop = asyncio.get_event_loop()
+        count = await loop.run_in_executor(
+            None, rag_service.index_sync, name, req.texts, req.metadatas,
+        )
         return {"tenant": name, "chunk_count": count}
+    except asyncio.CancelledError:
+        raise HTTPException(status_code=499, detail="Request cancelled by client")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

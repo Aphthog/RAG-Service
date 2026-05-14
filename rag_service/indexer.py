@@ -114,7 +114,7 @@ class FAISSIndexer:
         results = []
         for i, d in zip(indices[0], distances[0]):
             if i >= 0 and i < len(self._chunks):
-                results.append((int(i), float(d)))
+                results.append((int(i), -float(d)))
         return results
 
     def search_sparse(self, q: csr_matrix, k: int) -> list[tuple[int, float]]:
